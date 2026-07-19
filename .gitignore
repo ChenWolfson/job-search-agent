@@ -1,0 +1,12 @@
+.secrets/
+.venv/
+snapshots/
+outbox/
+config.json
+latest_snapshot.json
+dispatch.log
+launchd.out.log
+launchd.err.log
+.dispatch.lock
+__pycache__/
+.DS_Store

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Save as:  ~/Library/LaunchAgents/com.yourname.jobtracker.dispatch.plist
+  (replace /Users/YOU/path/to/job-search-agent with the real path)
+  Load:     launchctl load ~/Library/LaunchAgents/com.yourname.jobtracker.dispatch.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.yourname.jobtracker.dispatch</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOU/path/to/job-search-agent/run_now.sh</string>
+    </array>
+
+    <!-- Primary trigger: WatchPaths — fires the dispatcher the moment a file
+         lands in the outbox (while the machine is awake; if asleep, on wake). -->
+    <key>WatchPaths</key>
+    <array>
+        <string>/Users/YOU/path/to/job-search-agent/outbox</string>
+    </array>
+
+    <!-- Safety net: once a day at 19:00, in case a watch event was missed -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key><integer>19</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+    </array>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOU/path/to/job-search-agent/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOU/path/to/job-search-agent/launchd.err.log</string>
+</dict>
+</plist>
