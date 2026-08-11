@@ -2,11 +2,22 @@
 .venv/
 snapshots/
 outbox/
+alerts_inbox/
+fetch_trigger/
 config.json
+CLAUDE.md
 latest_snapshot.json
+processed_threads.jsonl
 dispatch.log
 launchd.out.log
 launchd.err.log
+launchd.fetch.log
 .dispatch.lock
+.fetch.lock
 __pycache__/
 .DS_Store
+
+# Your own job search — never commit these to a public repo
+Sessions/
+Companies/
+CV/

@@ -2,5 +2,9 @@
   "spreadsheet_id": "YOUR_SPREADSHEET_ID",
   "jobs_sheet_id": 0,
   "log_sheet_id": 1,
-  "url": "https://docs.google.com/spreadsheets/d/YOUR_SPREADSHEET_ID/edit"
+  "url": "https://docs.google.com/spreadsheets/d/YOUR_SPREADSHEET_ID/edit",
+
+  "home_city": "",
+  "location_tokens": [],
+  "rtl_columns": []
 }

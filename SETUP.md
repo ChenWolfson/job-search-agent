@@ -6,11 +6,15 @@ Everything happens in the browser, with your Google account.
 
 ## What we ask Google for, and why
 
-| Scope | Why it's needed | What it does **not** allow |
-|---|---|---|
-| `spreadsheets` | write to the tracker sheet | — |
-| `gmail.send` | send the daily digest | **send only.** No reading email. Recipient is hardcoded |
-| `drive.readonly` | optional (legacy) | **read only** |
+| Scope | Used by | Why it's needed | What it does **not** allow |
+|---|---|---|---|
+| `spreadsheets` | `tracker.py` | write to the tracker sheet | — |
+| `gmail.send` | `tracker.py` | send the daily digest | **send only.** Cannot read your mail. Recipient is hardcoded |
+| `drive.readonly` | `tracker.py` | optional (legacy) | **read only** |
+| `gmail.readonly` | `fetch_alerts.py` | read job-alert digests | **read only.** Separate token (`token_read.json`) |
+
+The split is deliberate: the component that writes to your sheet cannot read
+your email, and the component that reads your email cannot write anywhere.
 
 ---
 
@@ -53,12 +57,21 @@ the project root (create the folder if needed). It is excluded from git.
 **This file is like a house key — never share it.**
 
 ## Step 7 — the spreadsheet
-1. Create a new Google Sheet with two tabs: `Job Tracker` and `יומן עדכונים` (the audit log).
-2. In the `Job Tracker` tab, paste the 19 column headers into row 1 (see `COLUMNS` in `tracker.py`).
+1. Create a new Google Sheet with two tabs, named exactly: **`Job Tracker`** and
+   **`Change Log`**. (If you rename them, change `TAB_JOBS` / `TAB_LOG` in
+   `tracker.py` to match.)
+2. In the `Job Tracker` tab, paste the 21 column headers into row 1 — copy them
+   straight from `COLUMNS` in `tracker.py`. In the `Change Log` tab, paste
+   `LOG_COLUMNS` into row 1.
+   **The order matters and is positional.** Never insert a column by hand later:
+   the code addresses columns by index and will silently read and write the wrong
+   ones. See ARCHITECTURE.md.
 3. Copy `config.example.json` to `config.json` and fill in the spreadsheet id
-   (from the URL) and the two tab ids (the `gid=` in each tab's URL).
-4. Run `python tracker.py reformat` — applies all formatting, dropdowns, and
-   conditional-color rules.
+   (from the URL) and the two tab ids (the `gid=` in each tab's URL). Set
+   `home_city` and `location_tokens` for where you live.
+4. Set `MAIL_TO` in `tracker.py` to your own address.
+5. Run `python tracker.py reformat` — applies all formatting, dropdowns, and
+   conditional-colour rules.
 
 ## Step 8 — first run
 The first run of any command opens a browser window:

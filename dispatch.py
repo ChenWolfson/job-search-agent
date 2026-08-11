@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-dispatch.py — runs in a network-enabled environment (launchd / manual) and
-applies whatever the agent wrote to the outbox.
+dispatch.py — runs in an environment that has network access (launchd / manual),
+and applies whatever the agent wrote to outbox/.
 
-Why this exists: the AI agent runs in a sandboxed VM that blocks direct access
-to googleapis.com (a known platform limitation). So the agent only *writes* an
-intent file to outbox/, and this dispatcher — running in a normal environment
-with network access — applies it to the sheet and sends the email digest.
+Why it exists: the agent runs in an isolated VM that blocks direct access to
+googleapis.com (a platform constraint, not a bug). So the agent only *writes* an
+intent file to outbox/, and this dispatcher — running normally, with network —
+applies it to the sheet and sends the email.
 
-Flow per outbox file: outbox/ → (claim) processing/ → apply → done/ (or failed/).
-A lockfile prevents two concurrent dispatchers. One consolidated email per cycle.
+Flow per outbox file: outbox/ → (claim) processing/ → applied → done/ (or failed/).
+A lockfile prevents two dispatchers running at once. One consolidated email per cycle.
 """
 import glob
 import json
@@ -29,7 +29,13 @@ FAILED = os.path.join(OUTBOX, "failed")
 LOCK = os.path.join(HERE, ".dispatch.lock")
 LOG = os.path.join(HERE, "dispatch.log")
 
-MAIL_TO = "you@example.com"  # ← your address (display only; tracker.py holds the real one)
+# Shown in log lines only. The address that actually receives mail is MAIL_TO in
+# tracker.py — that is the one you must set.
+MAIL_TO = "you@example.com"
+
+# Every digest subject starts with this, so you can write one Gmail filter for
+# the whole system. Change it if you like, but keep it stable.
+SUBJECT_PREFIX = "Job search digest"
 
 
 def log(msg):
@@ -41,7 +47,7 @@ def log(msg):
 
 def run_tracker(cmd, payload, extra=None):
     """Writes payload to a temp file and runs tracker.py <cmd> <file>.
-    Returns the JSON the command printed."""
+    Returns the JSON it printed."""
     if not payload:
         return {}
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
@@ -64,8 +70,8 @@ def run_tracker(cmd, payload, extra=None):
 
 
 def refresh_snapshot():
-    """Saves a copy of the live table to latest_snapshot.json — the sandboxed
-    agent cannot read the sheet directly, and needs this picture for its
+    """Saves a copy of the live table to latest_snapshot.json — the sandboxed agent
+    cannot read the sheet directly, and it needs a picture of the current state for
     dedup and status checks."""
     snap = os.path.join(HERE, "latest_snapshot.json")
     res = subprocess.run([PY, TRACKER, "read"], capture_output=True, text=True, timeout=120)
@@ -77,18 +83,40 @@ def refresh_snapshot():
         log(f"  ⚠️ snapshot refresh failed: {res.stderr.strip()[-200:]}")
 
 
+def update_dashboard(gmail_counts=None):
+    """Runs tracker.py dashboard-activity — updates the RECENT ACTIVITY block.
+    The whole comparison is a snapshot diff inside tracker.py (Python, zero tokens).
+    gmail_counts (optional) — {'yesterday':N,'week':N} from the agent."""
+    args = [PY, TRACKER, "dashboard-activity"]
+    tmp = None
+    if gmail_counts:
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8") as tf:
+            json.dump(gmail_counts, tf, ensure_ascii=False)
+            tmp = tf.name
+        args.append(tmp)
+    try:
+        res = subprocess.run(args, capture_output=True, text=True, timeout=120)
+        if res.returncode == 0:
+            log("  📊 dashboard — RECENT ACTIVITY updated")
+        else:
+            log(f"  ⚠️ dashboard update failed: {res.stderr.strip()[-200:]}")
+    finally:
+        if tmp:
+            os.unlink(tmp)
+
+
 def apply_file(path):
-    """Applies a single outbox file. Returns a dict with counters, warnings,
-    and the email content."""
+    """Applies a single outbox file. Returns counters, warnings, and the email body."""
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
 
-    # The agent must write an object. A list is a format mistake that would
-    # otherwise crash the whole cycle.
+    # The agent must write an object. A list is the format mistake that once broke
+    # a whole dispatch cycle — so it fails loudly and lands in failed/.
     if not isinstance(data, dict):
         raise RuntimeError(
-            f"outbox file must be a JSON object ({{...}}) with "
-            f"upserts/updates/flags — got {type(data).__name__}")
+            f"An outbox file must be a JSON object ({{...}}) with upserts/updates/flags — "
+            f"got {type(data).__name__}")
 
     warnings = []
 
@@ -111,14 +139,15 @@ def apply_file(path):
             "flagged": fl.get("flagged", 0),
             "warnings": warnings,
             "email_md": data.get("email_md", ""),
-            "subject": data.get("email_subject", "")}
+            "subject": data.get("email_subject", ""),
+            "gmail": data.get("activity_gmail")}
 
 
 def main():
     for d in (OUTBOX, PROCESSING, DONE, FAILED):
         os.makedirs(d, exist_ok=True)
 
-    # --- lock: a single dispatcher at any moment
+    # --- lock: one dispatcher at a time
     try:
         lock_fd = os.open(LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
@@ -134,33 +163,35 @@ def main():
             return
 
     try:
-        # Files stuck in processing/ mean a previous run was interrupted
-        # (sleep/shutdown). We hold the lock, so no run is in flight — it is
-        # safe to re-queue them (upsert dedups anyway).
+        # Files stuck in processing/ mean a previous run was cut off mid-cycle
+        # (sleep/shutdown). We hold the lock, so nothing else is running — safe to
+        # requeue them (upsert dedups anyway).
         for stale in sorted(glob.glob(os.path.join(PROCESSING, "*.json"))):
             name = os.path.basename(stale)
             os.rename(stale, os.path.join(OUTBOX, name))
-            log(f"  ♻️ {name} re-queued from processing/ (previous run interrupted)")
+            log(f"  ♻️ {name} returned from processing/ (previous run was interrupted)")
 
-        files = sorted(glob.glob(os.path.join(OUTBOX, "*.json")))  # excludes subdirs
+        files = sorted(glob.glob(os.path.join(OUTBOX, "*.json")))  # excludes subdirectories
         if not files:
-            refresh_snapshot()  # even with no outbox — keep the agent's picture fresh
-            return  # nothing to do — stay quiet (most runs are empty)
+            refresh_snapshot()  # even with no outbox — refresh the picture for the next agent
+            update_dashboard()  # and update the activity metric (catches manual edits too)
+            return  # nothing to do — quiet (most runs are empty)
 
         log(f"found {len(files)} outbox file(s) to process")
         total_added = total_skipped = total_updated = total_flagged = 0
         email_parts, warnings, subject = [], [], None
+        gmail_counts = None
 
         for src in files:
             name = os.path.basename(src)
-            # peek: if the file is not valid JSON yet, the agent is probably
-            # mid-write. Leave it in the outbox; WatchPaths will fire again
-            # once the write completes.
+            # peek: if the file isn't valid JSON yet, the agent is probably still
+            # writing it. Leave it in outbox/; WatchPaths fires again when the
+            # write completes.
             try:
                 with open(src, encoding="utf-8") as f:
                     json.load(f)
             except (json.JSONDecodeError, ValueError):
-                log(f"  ⏭ {name}: partial JSON (being written?) — skipped, next run will catch it")
+                log(f"  ⏭ {name}: partial JSON (being written?) — skipped, caught next run")
                 continue
             claim = os.path.join(PROCESSING, name)
             os.rename(src, claim)  # atomic claim — a second run won't find it
@@ -170,6 +201,7 @@ def main():
                 total_skipped += r["skipped"]
                 total_updated += r["updated"]
                 total_flagged += r["flagged"]
+                gmail_counts = r["gmail"] or gmail_counts
                 warnings += r["warnings"]
                 if r["email_md"]:
                     email_parts.append(r["email_md"])
@@ -185,9 +217,9 @@ def main():
                 warnings.append(f"File FAILED (moved to outbox/failed/, nothing applied): "
                                 f"{name} — {e}")
 
-        # --- one consolidated email per cycle. Warnings are always sent —
-        #     even without email_md — otherwise a failure dies silently and
-        #     nobody ever knows.
+        # --- One consolidated email per cycle. Warnings are always sent, even with
+        #     no email_md — otherwise a failure is swallowed silently and nobody
+        #     ever finds out.
         if email_parts or warnings:
             runs = f"{len(email_parts)} runs" if len(email_parts) > 1 else "1 run"
             header = (f"## 🔧 Dispatch Summary\n"
@@ -203,11 +235,11 @@ def main():
                 tf.write(body)
                 mail_path = tf.name
             try:
-                # Stable Hebrew subject prefix ("job search summary") — kept
-                # consistent so a Gmail filter can label these digests
-                subj = subject or f"סיכום חיפוש עבודה — {datetime.now():%d/%m}"
+                # The subject must start with SUBJECT_PREFIX so one Gmail filter
+                # catches every message this system sends.
+                subj = subject or f"{SUBJECT_PREFIX} — {datetime.now():%d/%m}"
                 if warnings and not email_parts:
-                    subj = f"סיכום חיפוש עבודה — ⚠️ dispatch warnings {datetime.now():%d/%m}"
+                    subj = f"{SUBJECT_PREFIX} — ⚠️ dispatch warnings {datetime.now():%d/%m}"
                 res = subprocess.run(
                     [PY, TRACKER, "notify", mail_path, "--subject", subj],
                     capture_output=True, text=True, timeout=120)
@@ -218,9 +250,10 @@ def main():
             finally:
                 os.unlink(mail_path)
         else:
-            log("  nothing to email (files empty or failed)")
+            log("  no email content (files were empty or failed)")
 
-        refresh_snapshot()  # fresh picture for the next agent run
+        refresh_snapshot()  # fresh picture for the next agent run (it can't read the sheet)
+        update_dashboard(gmail_counts)  # the activity metric on the dashboard
         log(f"cycle done: +{total_added} · {total_skipped} duplicates · "
             f"{total_updated} cells · {total_flagged} flags · {len(warnings)} warnings")
 

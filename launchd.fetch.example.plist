@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Pulls job-alert digests from Gmail at 08:50, ten minutes before the agent runs.
+
+  Save as:  ~/Library/LaunchAgents/com.yourname.jobtracker.fetchalerts.plist
+  (replace /Users/YOU/path/to/job-search-agent with the real path)
+  Load:     launchctl load ~/Library/LaunchAgents/com.yourname.jobtracker.fetchalerts.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.yourname.jobtracker.fetchalerts</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOU/path/to/job-search-agent/fetch_now.sh</string>
+    </array>
+
+    <!-- Primary: 08:50 daily, before the agent wakes at 09:00 -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>50</integer>
+        </dict>
+    </array>
+
+    <!-- Escape hatch: the agent can ignite a pull itself by writing a file here,
+         for when the 08:50 run was missed because the machine was asleep. -->
+    <key>WatchPaths</key>
+    <array>
+        <string>/Users/YOU/path/to/job-search-agent/fetch_trigger</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOU/path/to/job-search-agent/launchd.fetch.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOU/path/to/job-search-agent/launchd.fetch.log</string>
+</dict>
+</plist>
